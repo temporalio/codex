@@ -308,6 +308,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
         last: true,
         all: false,
         images: vec![],
+        continue_turn: false,
         prompt: None,
     };
     let named_args = crate::cli::ResumeArgs {
@@ -315,6 +316,7 @@ async fn resume_lookup_model_providers_filters_only_last_lookup() {
         last: false,
         all: false,
         images: vec![],
+        continue_turn: false,
         prompt: None,
     };
 
