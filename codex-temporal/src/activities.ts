@@ -13,14 +13,40 @@ import { findRollout, inspectPrompt } from "./rollout.js";
 // context Codex injects as user messages of its own.
 const marker = (promptId: string) => `​[codex-temporal:${promptId}]`;
 
-const heartbeatEvery = (ms: number, details: () => unknown) => {
+const HEARTBEAT_MS = 3000;
+
+/**
+ * Heartbeat until the turn goes quiet.
+ *
+ * A turn that stops producing events is not progress, however healthy the worker is. Codex can
+ * hang without dying, and a heartbeat on a timer would report that as healthy forever, pinning
+ * the workflow. So the caller kills the child once the gap grows too large, which frees the
+ * thread's writer lock and lets Temporal re-drive the turn somewhere else.
+ * `progressedAt` is read on every beat, so the caller marks
+ * progress by updating it; `onStall` is called once when the gap grows too large.
+ */
+const heartbeatWhileProgressing = (
+  details: () => unknown,
+  progressedAt: () => number,
+  stallTimeoutMs: number,
+  onStall: () => void,
+) => {
+  let stalled = false;
   const timer = setInterval(() => {
+    if (!stalled && Date.now() - progressedAt() > stallTimeoutMs) {
+      stalled = true;
+      onStall();
+      return;
+    }
+    if (stalled) {
+      return;
+    }
     try {
       Context.current().heartbeat(details());
     } catch {
       // outside an activity context (a unit test); ignore
     }
-  }, ms);
+  }, HEARTBEAT_MS);
   timer.unref?.();
   return () => clearInterval(timer);
 };
@@ -30,6 +56,15 @@ const beat = (details: unknown) => {
     Context.current().heartbeat(details);
   } catch {
     // outside an activity context; ignore
+  }
+};
+
+// Undefined outside an activity context (a unit test), so callers treat it as optional.
+const cancellationSignal = (): AbortSignal | undefined => {
+  try {
+    return Context.current().cancellationSignal;
+  } catch {
+    return undefined;
   }
 };
 
@@ -57,7 +92,25 @@ export function makeActivities(cfg: Config) {
 
   async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     let threadId = input.threadId ?? threadIdFromLastAttempt();
-    const stop = heartbeatEvery(3000, () => threadId);
+    let progressedAt = Date.now();
+
+    // Kills the codex child: on a stall, and when the workflow interrupts the turn. Without it an
+    // interrupt would cancel the activity and leave codex running against the same thread.
+    const child = new AbortController();
+    let stalledFor = 0;
+    const cancellation = cancellationSignal();
+    cancellation?.addEventListener("abort", () => child.abort(), { once: true });
+
+    const stop = heartbeatWhileProgressing(
+      () => threadId,
+      () => progressedAt,
+      cfg.stallTimeoutMs,
+      () => {
+        stalledFor = Date.now() - progressedAt;
+        child.abort();
+      },
+    );
+    const turnOptions = { signal: child.signal };
 
     try {
       if (threadId) {
@@ -72,7 +125,7 @@ export function makeActivities(cfg: Config) {
         if (state?.recorded) {
           // The prompt is recorded but the turn never finished. Carry it on rather than asking
           // the same thing twice; Codex fills in a tool call whose output never landed.
-          const turn = await codex.resumeThread(threadId, threadOptions).continueTurn();
+          const turn = await codex.resumeThread(threadId, threadOptions).continueTurn(turnOptions);
           return {
             threadId,
             finalResponse: turn.finalResponse || state.lastAgentMessage,
@@ -84,10 +137,14 @@ export function makeActivities(cfg: Config) {
       const thread = threadId
         ? codex.resumeThread(threadId, threadOptions)
         : codex.startThread(threadOptions);
-      const { events } = await thread.runStreamed(`${input.text}${marker(input.promptId)}`);
+      const { events } = await thread.runStreamed(
+        `${input.text}${marker(input.promptId)}`,
+        turnOptions,
+      );
 
       let finalResponse = "";
       for await (const event of events) {
+        progressedAt = Date.now();
         if (event.type === "thread.started") {
           // Heartbeat the id the moment Codex mints it, so a crash from here on resumes this
           // thread instead of starting a second one.
@@ -104,6 +161,15 @@ export function makeActivities(cfg: Config) {
         throw new Error("codex ran a turn without reporting a thread id");
       }
       return { threadId, finalResponse, ran: true };
+    } catch (err) {
+      if (stalledFor > 0) {
+        throw new Error(
+          `codex produced no events for ${Math.round(stalledFor / 1000)}s and was killed; ` +
+            `the turn will be carried on by the next attempt`,
+          { cause: err },
+        );
+      }
+      throw err;
     } finally {
       stop();
     }

@@ -17,6 +17,9 @@ export interface Config {
   // Codex's own sandbox setting for the turn. Left to the caller because a durable executor
   // running unattended is exactly where you want to be deliberate about it.
   readonly sandboxMode: "read-only" | "workspace-write" | "danger-full-access";
+  // How long a turn may produce no events before its codex is killed and the turn re-driven.
+  // Long enough for a slow tool, short enough that a hung codex does not pin the workflow.
+  readonly stallTimeoutMs: number;
 }
 
 export function fromEnv(): Config {
@@ -30,5 +33,6 @@ export function fromEnv(): Config {
     model: process.env.CODEX_MODEL,
     projectDir: process.env.CODEX_PROJECT_DIR ?? process.cwd(),
     sandboxMode: (process.env.CODEX_SANDBOX as Config["sandboxMode"]) ?? "workspace-write",
+    stallTimeoutMs: Number(process.env.CODEX_STALL_TIMEOUT_MS ?? 10 * 60_000),
   };
 }
