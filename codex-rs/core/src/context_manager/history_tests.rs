@@ -1925,10 +1925,11 @@ fn normalize_adds_missing_output_for_tool_search_call() {
     );
 }
 
-#[cfg(debug_assertions)]
+/// Code mode dispatches custom tool calls, so a crash between the call and its result is the
+/// ordinary way this gap appears. Filling it in has to be quiet, or a resumed thread cannot be
+/// sent to the model at all.
 #[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
+fn normalize_fills_missing_output_for_custom_tool_call() {
     let items = vec![ResponseItem::CustomToolCall {
         id: None,
         status: None,
@@ -1940,12 +1941,24 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
+
+    let filled = raw_items(&h);
+    assert_eq!(filled.len(), 2);
+    let ResponseItem::CustomToolCallOutput {
+        call_id, output, ..
+    } = &filled[1]
+    else {
+        panic!(
+            "expected a synthesized custom tool call output, got {:?}",
+            filled[1]
+        );
+    };
+    assert_eq!(call_id, "tool-x");
+    assert_eq!(output.body.to_text().as_deref(), Some("aborted"));
 }
 
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() {
+fn normalize_fills_missing_output_for_local_shell_call_with_id() {
     let items = vec![ResponseItem::LocalShellCall {
         id: None,
         call_id: Some("shell-1".to_string()),
