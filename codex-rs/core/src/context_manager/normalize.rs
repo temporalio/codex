@@ -18,6 +18,21 @@ const AUDIO_CONTENT_OMITTED_PLACEHOLDER: &str =
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
+/// Stands in for a tool call that never reported a result, so the payload stays well formed.
+///
+/// It says unknown rather than failed on purpose. The call is missing its result because
+/// something stopped between dispatch and the write, and neither an interrupt nor a crash can
+/// promise the command did not run first, so the model has to check before repeating it.
+pub(crate) const MISSING_OUTPUT_PLACEHOLDER: &str = "The outcome of this call is unknown: it started and no \
+     result was recorded. It may have taken effect. Check the current state before running it \
+     again.";
+
+/// Fill in the output of any tool call that never reported one.
+///
+/// A gap here is expected, not a defect: an interrupt or a crash between dispatching a tool and
+/// writing its result leaves the call alone in the transcript, and a resumed thread has to be
+/// able to send that history to the model. Every kind of call is treated the same way for that
+/// reason, including the custom tool calls that code mode dispatches.
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>) {
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
@@ -56,7 +71,9 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                     ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
                         call_id: call_id.clone(),
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        output: FunctionCallOutputPayload::from_text(
+                            MISSING_OUTPUT_PLACEHOLDER.to_string(),
+                        ),
                         internal_chat_message_metadata_passthrough: None,
                     }),
                 ));
@@ -82,16 +99,16 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
             ResponseItem::CustomToolCall { id, call_id, .. }
                 if !custom_tool_output_ids.contains(call_id.as_str()) =>
             {
-                error_or_panic(format!(
-                    "Custom tool call output is missing for call id: {call_id}"
-                ));
+                info!("Custom tool call output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::CustomToolCallOutput {
                         id: synthetic_output_id("ctco", id.as_deref()),
                         call_id: call_id.clone(),
                         name: None,
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        output: FunctionCallOutputPayload::from_text(
+                            MISSING_OUTPUT_PLACEHOLDER.to_string(),
+                        ),
                         internal_chat_message_metadata_passthrough: None,
                     }),
                 ));
@@ -102,15 +119,15 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 call_id: Some(call_id),
                 ..
             } if !function_output_ids.contains(call_id.as_str()) => {
-                error_or_panic(format!(
-                    "Local shell call output is missing for call id: {call_id}"
-                ));
+                info!("Local shell call output is missing for call id: {call_id}");
                 missing_outputs_to_insert.push((
                     idx,
                     ResponseItemEnvelope::new(ResponseItem::FunctionCallOutput {
                         id: synthetic_output_id("fco", id.as_deref()),
                         call_id: call_id.clone(),
-                        output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        output: FunctionCallOutputPayload::from_text(
+                            MISSING_OUTPUT_PLACEHOLDER.to_string(),
+                        ),
                         internal_chat_message_metadata_passthrough: None,
                     }),
                 ));
