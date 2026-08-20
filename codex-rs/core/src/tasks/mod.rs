@@ -4,12 +4,15 @@ mod regular;
 mod review;
 mod user_shell;
 
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use codex_diagnostics::Gauge;
 use codex_extension_api::ThreadIdleCause;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Notify;
@@ -17,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::Span;
+use tracing::error;
 use tracing::field;
 use tracing::info_span;
 use tracing::trace;
@@ -68,6 +72,17 @@ const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 static ACTIVE_TURNS: Gauge = Gauge::new("core.turns.active");
 
 pub(crate) type SessionTaskResult = CodexResult<Option<String>>;
+
+/// Best-effort text for a panic payload, which is only readable for the usual string cases.
+fn describe_panic(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
 
 pub(crate) enum MailboxParentProvenance {
     Ignore,
@@ -382,15 +397,29 @@ impl Session {
         let handle = tokio::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
-                let task_result = task_for_run
-                    .run(
-                        Arc::clone(&session),
-                        ctx,
-                        task_input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .instrument(trace_span!("session_task.run"))
-                    .await;
+                // A panic here would skip the lifecycle below, and a client waiting on the turn's
+                // terminal event would wait for one that never comes. Turn it into a task error so
+                // the turn finishes the same way any other failure does.
+                let task_result = match AssertUnwindSafe(
+                    task_for_run
+                        .run(
+                            Arc::clone(&session),
+                            ctx,
+                            task_input,
+                            task_cancellation_token.child_token(),
+                        )
+                        .instrument(trace_span!("session_task.run")),
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok(task_result) => task_result,
+                    Err(panic) => {
+                        let detail = describe_panic(panic.as_ref());
+                        error!("turn task panicked: {detail}");
+                        Err(CodexErrorDetails::Fatal(format!("turn task panicked: {detail}")).into())
+                    }
+                };
                 let sess = Arc::clone(&session);
                 if let Err(err) = sess.flush_rollout().await {
                     warn!("failed to flush rollout before completing turn: {err}");
