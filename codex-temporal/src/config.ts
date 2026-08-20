@@ -11,6 +11,8 @@ export interface Config {
   // it at shared storage.
   readonly sessionsDir: string;
   readonly idleTimeout: string;
+  readonly turnTimeout: string;
+  readonly maxAttempts: number;
   // Which codex binary to drive. Defaults to whatever the SDK finds; point it at a fork build to
   // drive that instead.
   readonly codexPath?: string;
@@ -33,6 +35,8 @@ export function fromEnv(): Config {
     taskQueue: process.env.CODEX_TEMPORAL_TASK_QUEUE ?? "codex-thread",
     sessionsDir: process.env.CODEX_SESSIONS_DIR ?? `${codexHome}/sessions`,
     idleTimeout: process.env.CODEX_IDLE_TIMEOUT ?? "5 minutes",
+    turnTimeout: process.env.CODEX_TURN_TIMEOUT ?? "1 hour",
+    maxAttempts: Number(process.env.CODEX_MAX_ATTEMPTS ?? 5),
     codexPath: process.env.CODEX_PATH,
     model: process.env.CODEX_MODEL,
     projectDir: process.env.CODEX_PROJECT_DIR ?? process.cwd(),

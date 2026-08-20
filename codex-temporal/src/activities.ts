@@ -8,6 +8,7 @@ import type { Config } from "./config.js";
 import type { RunTurnInput, RunTurnResult } from "./protocol.js";
 import { findRollout, inspectPrompt } from "./rollout.js";
 import { reapOrphanedWriter } from "./orphans.js";
+import { asActivityFailure } from "./errors.js";
 
 // The prompt carries a zero-width marker with its promptId, so a re-driven activity can tell
 // whether this exact prompt was already recorded. It also tells our prompts apart from the
@@ -214,7 +215,7 @@ export function makeActivities(cfg: Config) {
           { cause: err },
         );
       }
-      throw err;
+      throw asActivityFailure(err);
     } finally {
       stop();
     }

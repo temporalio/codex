@@ -59,6 +59,8 @@ Reaping observed against a real thread held by a detached process: a resume fail
 - **Mid-turn: the turn is carried on, not restarted.** On a retry, the activity looks for its own prompt in the rollout. Recorded and answered means the answer is already there and nothing needs to run. Recorded and unfinished means `continueTurn()`, so the prompt is not asked twice.
 - **A first turn that dies before Codex minted a thread id** starts over, which is correct: nothing had been recorded yet. Once the id exists the activity heartbeats it, so a retry from that point resumes rather than opening a second thread.
 - **Tool side effects are not rolled back, and are not repeated either.** A crash between a tool starting and its result landing leaves a tool call with no output. The model is told the outcome is unknown and decides what to do, which is the safe default for a coding agent. Tools that had already completed keep their recorded results and do not run again.
+- **One thread belongs to one machine.** The reaper works through `lsof` on the local `thread-writer-locks` file, `ps`, and a local kill, and Codex's writer lock is an advisory `flock`. None of that coordinates two workers on different hosts, even with a shared sessions directory, so one thread's turns must not be spread across hosts. Scale by running more threads, not by spreading one.
+- **A turn that cannot run says so.** Attempts per turn default to 5, and a failure no retry can fix, such as a `CODEX_PATH` that is not executable, is non-retryable and stops on the first one. The worker also checks that path on startup rather than once per attempt. Either way the thread stays up and `threadState` reports `outcome: "failed"` with the message, instead of reporting it as an interrupt.
 - **The rollout stays honest about the gap.** Codex does not write the synthesized output back, so a thread that survived a crash keeps one more tool call than tool outputs on disk forever. That is the record telling the truth, not a defect.
 
 ## Running it
@@ -93,7 +95,13 @@ npx tsx inspect.mts <threadId>
 
 The worker needs a Codex build from this fork, because it calls `--continue`. Build it with `cargo build -p codex-cli --bin codex` in `codex-rs` (set `CARGO_NET_GIT_FETCH_WITH_CLI=true` if a git dependency fails to authenticate).
 
-Env: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `CODEX_TEMPORAL_TASK_QUEUE`, `CODEX_SESSIONS_DIR`, `CODEX_IDLE_TIMEOUT`, `CODEX_PATH`, `CODEX_MODEL`, `CODEX_PROJECT_DIR`, `CODEX_SANDBOX`.
+Env: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `CODEX_TEMPORAL_TASK_QUEUE`, `CODEX_SESSIONS_DIR`, `CODEX_IDLE_TIMEOUT`, `CODEX_TURN_TIMEOUT`, `CODEX_MAX_ATTEMPTS`, `CODEX_STALL_TIMEOUT_MS`, `CODEX_PATH`, `CODEX_MODEL`, `CODEX_PROJECT_DIR`, `CODEX_SANDBOX`.
+
+`CODEX_TURN_TIMEOUT` and `CODEX_MAX_ATTEMPTS` reach the workflow as start arguments, so they are fixed for the life of a thread. Changing them affects the next thread, not one already running.
+
+A worker serves one project: the activity passes `CODEX_PROJECT_DIR` as the turn's working directory, and a prompt carries no directory of its own. So a second project means a second worker on its own task queue.
+
+`npm test` covers the failure classifier. The rest is verified end to end, through `dev/`.
 
 `temporal workflow query --workflow-id codex-thread-<session> --name threadState` reports the queue, the thread id, the turn in flight, and how the last turn ended.
 

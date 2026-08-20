@@ -18,7 +18,11 @@ export async function connect() {
 export async function submitPrompt(sessionId: string, text: string, promptId = randomUUID()) {
   const { cfg, client, connection } = await connect();
   const prompt: PromptInput = { promptId, text };
-  const options: ThreadOptions = { idleTimeout: cfg.idleTimeout };
+  const options: ThreadOptions = {
+    idleTimeout: cfg.idleTimeout,
+    turnTimeout: cfg.turnTimeout,
+    maxAttempts: cfg.maxAttempts,
+  };
   try {
     await client.workflow.signalWithStart(WORKFLOW_TYPE, {
       taskQueue: cfg.taskQueue,

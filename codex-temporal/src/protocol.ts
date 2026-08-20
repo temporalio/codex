@@ -44,8 +44,11 @@ export interface ThreadState {
   readonly running?: { readonly promptId: string };
   readonly finished?: {
     readonly promptId: string;
-    readonly outcome: "answered" | "interrupted";
+    // `failed` is its own outcome because reporting a genuine failure as an interrupt hides the
+    // reason, and the reason is the only thing worth having when a turn will not run.
+    readonly outcome: "answered" | "interrupted" | "failed";
     readonly finalResponse: string;
+    readonly error?: string;
   };
 }
 
@@ -53,4 +56,10 @@ export interface ThreadOptions {
   // How long the workflow stays alive with no work before it retires. The next prompt starts a
   // fresh run, which rebuilds nothing: Codex's rollout already holds the conversation.
   readonly idleTimeout?: string;
+  // How long one turn may take. A large refactor turn can outlast a small value and be killed
+  // mid-work, so this is the knob to raise for real work rather than a limit to live with.
+  readonly turnTimeout?: string;
+  // Attempts per turn. Workflow options are fixed when the workflow starts, so changing this only
+  // affects the next thread, not one already running.
+  readonly maxAttempts?: number;
 }
