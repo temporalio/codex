@@ -1,0 +1,23 @@
+{
+  "name": "codex-temporal",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Temporal-backed durable executor for the Codex CLI",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "worker": "tsx src/worker.ts",
+    "submit": "tsx submit.mts"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

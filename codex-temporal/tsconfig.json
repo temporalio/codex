@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@openai/codex-sdk": ["../sdk/typescript/src/index.ts"],
+      "@modelcontextprotocol/sdk/types.js": [
+        "./node_modules/@modelcontextprotocol/sdk/dist/esm/types.d.ts"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
