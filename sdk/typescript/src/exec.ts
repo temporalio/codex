@@ -40,6 +40,11 @@ export type CodexExecArgs = {
   approvalPolicy?: ApprovalMode;
 };
 
+// A turn that was aborted has to leave nothing behind: codex holds a writer lock on the thread
+// for as long as it lives, so a child that ignores the polite signal would block every later
+// resume of that thread. Escalate rather than trust it to exit.
+const KILL_GRACE_MS = 5000;
+
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 const CODEX_NPM_NAME = "@openai/codex";
@@ -195,6 +200,27 @@ export class CodexExec {
     let spawnError: unknown | null = null;
     child.once("error", (err) => (spawnError = err));
 
+    let killTimer: NodeJS.Timeout | undefined;
+    let exited = false;
+    child.once("exit", () => {
+      exited = true;
+      if (killTimer) clearTimeout(killTimer);
+    });
+    const escalateKill = () => {
+      if (exited || killTimer) return;
+      killTimer = setTimeout(() => {
+        if (!exited) child.kill("SIGKILL");
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    };
+    if (args.signal) {
+      if (args.signal.aborted) {
+        escalateKill();
+      } else {
+        args.signal.addEventListener("abort", escalateKill, { once: true });
+      }
+    }
+
     if (!child.stdin) {
       child.kill();
       throw new Error("Child process has no stdin");
@@ -242,6 +268,7 @@ export class CodexExec {
       }
     } finally {
       rl.close();
+      if (killTimer) clearTimeout(killTimer);
       child.removeAllListeners();
       try {
         if (!child.killed) child.kill();
