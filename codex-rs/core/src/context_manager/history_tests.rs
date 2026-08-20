@@ -1577,7 +1577,9 @@ fn normalize_adds_missing_output_for_function_call() {
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "call-x".to_string(),
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -1616,7 +1618,9 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 id: None,
                 call_id: "tool-x".to_string(),
                 name: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -1662,7 +1666,9 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "shell-1".to_string(),
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -1767,7 +1773,9 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "c1".to_string(),
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::CustomToolCall {
@@ -1783,7 +1791,9 @@ fn normalize_mixed_inserts_and_removals() {
                 id: None,
                 call_id: "t1".to_string(),
                 name: None,
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
             ResponseItem::LocalShellCall {
@@ -1802,7 +1812,9 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "s1".to_string(),
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -1837,7 +1849,9 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
             ResponseItem::FunctionCallOutput {
                 id: None,
                 call_id: "call-x".to_string(),
-                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+                output: FunctionCallOutputPayload::from_text(
+                    crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER.to_string()
+                ),
                 internal_chat_message_metadata_passthrough: None,
             },
         ]
@@ -1954,7 +1968,10 @@ fn normalize_fills_missing_output_for_custom_tool_call() {
         );
     };
     assert_eq!(call_id, "tool-x");
-    assert_eq!(output.body.to_text().as_deref(), Some("aborted"));
+    assert_eq!(
+        output.body.to_text().as_deref(),
+        Some(crate::context_manager::normalize::MISSING_OUTPUT_PLACEHOLDER)
+    );
 }
 
 #[test]
