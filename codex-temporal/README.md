@@ -33,6 +33,8 @@ Both are small: the CLI flag maps to the empty-input turn that already existed, 
 
 A gap there is expected, not a defect, so all three now log it the same way. The recovery code was already sitting directly after the panic, which is the tell.
 
+**Ending a turn whose task died.** A panic inside the turn task unwound past both the finish hook and the waiters, so a client waited for a terminal event that never came and codex stayed alive holding the writer lock. The task now runs under `catch_unwind`, and a panic becomes a fatal task error that flows through the same finish hook as any other failure. That is the general guard behind the specific fix above.
+
 **Not leaving a child behind.** The SDK aborted a turn by sending the child a polite signal and trusting it to exit. A child that ignores it keeps running, and codex holds a writer lock on the thread for as long as it lives, so every later resume of that thread fails with `already has an active writer`. An aborted turn now escalates to `SIGKILL` after a grace period.
 
 **Saying what actually happened.** The synthesized output used to read `aborted`. After a hard kill that is optimistic: the command may well have run. It now says the outcome is unknown and the state should be checked before repeating the call. This does not touch the interrupt path, which writes its own richer output (`Wall time: N seconds` plus `aborted by user`); the placeholder is only reached when nothing was recorded at all.
@@ -61,6 +63,26 @@ Reaping observed against a real thread held by a detached process: a resume fail
 
 ## Running it
 
+`dev/` brings the whole stack up. It runs off the default ports and tracks every process by pid, so
+it cannot disturb, or be disturbed by, a Temporal or a Codex already running on the machine.
+
+```
+dev/setup.sh                                        # once: deps, and a preflight that explains itself
+
+dev/temporal.sh                                     # shell 1: Temporal on 127.0.0.1:7244, UI on 8244
+dev/worker.sh                                       # shell 2: the durable executor
+
+dev/ask.sh "Reply with the single word BRAVO."       # submit and wait for the answer
+dev/ask.sh smoke "What word did you just say?"       # same session twice: turn 2 resumes the thread
+dev/state.sh smoke                                  # what the thread is doing
+dev/inspect.sh smoke                                # what the rollout says, worker or no worker
+dev/stop.sh                                         # stops only what dev/ started
+```
+
+`TEMPORAL_PORT=7245 TEMPORAL_UI_PORT=8245` moves it if those ports are taken.
+
+By hand, if you would rather:
+
 ```
 npm install
 CODEX_PATH=../codex-rs/target/debug/codex npm run worker      # in one shell
@@ -79,9 +101,23 @@ Env: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `CODEX_TEMPORAL_TASK_QUEUE`, `COD
 
 ## Reproducing the crash test
 
-Ask for two shell commands one at a time, the second one slow (`echo first >> a.txt`, then `sleep 30`). Wait until the rollout has more tool calls than tool outputs, so the first tool is settled and the second is in flight. Then `pkill -9 -f "codex-temporal.*src/worker.ts"`, wait past the 30s heartbeat timeout, and start a fresh worker.
+```
+dev/crash-worker.sh    # killed during a long generation
+dev/crash-tool.sh      # killed with one tool settled and one in flight
+```
 
-The observed run. Before the kill: 1 prompt, 0 turn completions, 2 tool calls, 1 tool output, and `a.txt` with one line. After recovery: 1 prompt (not asked twice), 1 turn completion, the answer `DELTA`, and `a.txt` still with **one** line, so the completed tool did not run again. The activity comes back on attempt 2.
+Both print PASS or FAIL and exit non-zero on failure, and both kill the worker by recorded pid, so nothing else on the machine is at risk.
+
+Each one refuses to conclude anything from a turn that already finished, and that guard earns its place. The first version of these scripts waited for the workflow to report a thread id, which only arrives with the activity's *result*, so the kill always landed after the turn was over and every assertion passed for the wrong reason. They now find the rollout by a token in the prompt text, which Codex writes while the turn runs, and they check the activity attempt afterwards. An attempt of 2 is the one claim an early-finishing turn cannot fake.
+
+`dev/crash-tool.sh` is the one worth watching. It asks for two shell commands, the second slow, and waits until the rollout holds more tool calls than tool outputs before killing the worker.
+
+```
+before the kill: 1 prompt, 2 tool calls, 1 tool output,  a.txt 1 line
+after recovery:  1 prompt, 6 tool calls, 6 tool outputs, a.txt 1 line, answer DELTA, attempt 2
+```
+
+`a.txt` still holding one line is the assertion that matters: the settled tool kept its recorded result and did not run again. The tool count rising to 6 is the unknown-outcome wording working as intended. The model was told the interrupted call's outcome was unknown, so it went and checked the state rather than repeating the command.
 
 ## Layout
 
@@ -98,7 +134,6 @@ The observed run. Before the kill: 1 prompt, 0 turn completions, 2 tool calls, 1
 - **No step level, and it costs less than it sounds.** A turn is the smallest durable unit here, but that is not the same gap it was on the Pi fork. Codex records each item to the rollout as it happens, and a resumed turn picks up from there, so the work lost to a crash is already about one step: the tool-crash test above finished the turn with the completed tool's side effect intact and not repeated. What a step-per-activity design would add is control and visibility, not saved work, and the visibility half is covered by the progress on the heartbeat.
 
   The remaining half is not cheap. `run_turn` does have a step loop, so stopping after one step is a small change on its own, but a turn that stops early is not a completed turn, and this protocol has no way to say that: the app-server would emit `turn/completed` for something still mid-conversation. Making it honest means a new terminal turn status threaded through the app-server, both SDKs, the rollout projection that reconstructs turns (`build_turns_from_rollout_items`, which fork and rollback depend on), and the TUI. That is a large, invasive change for control this executor does not currently need, so it is deliberately not built.
-- **A settled tool call is reported as aborted, not unknown.** See above.
 - **A source build cannot compile the code-mode host.** Codex routes shell tools through a host that embeds V8, and the rusty_v8 prebuilt for `aarch64-apple-darwin` is a 404 in this version. Copying the prebuilt host out of the `@openai/codex` npm platform package into `codex-rs/target/debug/codex-code-mode-host` works and is what the crash test above ran against.
 - **A killed process can leave a thread locked.** The writer lock is an advisory `flock`, so the OS releases it when the process dies. It only blocks a resume while a process still holds it, which is why the panic above was so damaging: the panicking process stayed alive.
-- **`codex exec` still waits forever if a turn task dies without saying so.** The panic that used to cause that is fixed, but the wait loop only ends on an event or a closed stream, so any other silent death of the turn task would hang it. The stall timeout above is the reason that is now survivable rather than fatal.
+- **`codex exec` can still wait on a turn task that dies without saying so.** A panic is now turned into a turn failure, which is the cause that showed up in practice. The wait loop still only ends on an event or a closed stream, so any other silent death of the turn task would hang it, and the stall timeout above is what makes that survivable rather than fatal.
