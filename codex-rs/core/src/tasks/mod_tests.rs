@@ -222,3 +222,19 @@ fn emit_compact_metric_records_auto_local() {
         ])
     );
 }
+
+#[test]
+fn describe_panic_reads_the_usual_payloads() {
+    let from_str = std::panic::catch_unwind(|| panic!("literal message")).unwrap_err();
+    assert_eq!(super::describe_panic(from_str.as_ref()), "literal message");
+
+    let owned = String::from("owned message");
+    let from_string = std::panic::catch_unwind(|| panic!("{owned}")).unwrap_err();
+    assert_eq!(super::describe_panic(from_string.as_ref()), "owned message");
+
+    let from_other = std::panic::catch_unwind(|| std::panic::panic_any(7u8)).unwrap_err();
+    assert_eq!(
+        super::describe_panic(from_other.as_ref()),
+        "unknown panic payload"
+    );
+}
