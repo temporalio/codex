@@ -10,6 +10,12 @@ import { SandboxMode, ModelReasoningEffort, ApprovalMode, WebSearchMode } from "
 export type CodexExecArgs = {
   input: string;
 
+  /**
+   * Carry on the thread's current turn instead of sending `input` as a new prompt. Requires
+   * `threadId`. Used to finish a turn that stopped part way through.
+   */
+  continueTurn?: boolean;
+
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
@@ -157,8 +163,15 @@ export class CodexExec {
       commandArgs.push("--config", `approval_policy="${args.approvalPolicy}"`);
     }
 
+    if (args.continueTurn && !args.threadId) {
+      throw new Error("continueTurn requires a threadId");
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
+      if (args.continueTurn) {
+        commandArgs.push("--continue");
+      }
     }
 
     if (args.images?.length) {
@@ -199,7 +212,9 @@ export class CodexExec {
       child.kill();
       throw new Error("Child process has no stdin");
     }
-    child.stdin.write(args.input);
+    if (!args.continueTurn) {
+      child.stdin.write(args.input);
+    }
     child.stdin.end();
 
     if (!child.stdout) {

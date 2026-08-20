@@ -709,6 +709,20 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
+        (Some(ExecCommand::Resume(args)), root_prompt, imgs) if args.continue_turn => {
+            drop((root_prompt, imgs));
+            // A turn with no input runs from the history the rollout already holds, and core
+            // fills in a tool call whose output never landed, so a turn that stopped part way
+            // through can finish without the prompt being asked a second time.
+            let output_schema = load_output_schema(output_schema_path.clone());
+            (
+                InitialOperation::UserTurn {
+                    items: Vec::new(),
+                    output_schema,
+                },
+                String::new(),
+            )
+        }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
                 .prompt
@@ -851,6 +865,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             last: false,
             all: true,
             images: Vec::new(),
+            continue_turn: false,
             prompt: None,
         };
         let source_thread_id =

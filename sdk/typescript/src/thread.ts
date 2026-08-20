@@ -67,15 +67,33 @@ export class Thread {
     return { events: this.runStreamedInternal(input, turnOptions) };
   }
 
+  /**
+   * Carries the thread's current turn on without sending a new prompt, and returns the completed
+   * turn. Use it to finish a turn that stopped part way through, so the same thing is not asked
+   * twice. The thread must already have an id.
+   */
+  async continueTurn(turnOptions: TurnOptions = {}): Promise<Turn> {
+    return this.collect(this.runStreamedInternal(null, turnOptions));
+  }
+
+  /** Like `continueTurn`, streaming events as they are produced. */
+  async continueTurnStreamed(turnOptions: TurnOptions = {}): Promise<StreamedTurn> {
+    return { events: this.runStreamedInternal(null, turnOptions) };
+  }
+
   private async *runStreamedInternal(
-    input: Input,
+    input: Input | null,
     turnOptions: TurnOptions = {},
   ): AsyncGenerator<ThreadEvent> {
+    if (input === null && !this._id) {
+      throw new Error("Cannot continue a turn before the thread has an id");
+    }
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
-    const { prompt, images } = normalizeInput(input);
+    const { prompt, images } = input === null ? { prompt: "", images: [] } : normalizeInput(input);
     const generator = this._exec.run({
       input: prompt,
+      continueTurn: input === null,
       baseUrl: this._options.baseUrl,
       apiKey: this._options.apiKey,
       threadId: this._id,
@@ -115,7 +133,10 @@ export class Thread {
 
   /** Provides the input to the agent and returns the completed turn. */
   async run(input: Input, turnOptions: TurnOptions = {}): Promise<Turn> {
-    const generator = this.runStreamedInternal(input, turnOptions);
+    return this.collect(this.runStreamedInternal(input, turnOptions));
+  }
+
+  private async collect(generator: AsyncGenerator<ThreadEvent>): Promise<Turn> {
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     let usage: Usage | null = null;
