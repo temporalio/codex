@@ -75,6 +75,8 @@ Env: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `CODEX_TEMPORAL_TASK_QUEUE`, `COD
 
 `temporal workflow query --workflow-id codex-thread-<session> --name threadState` reports the queue, the thread id, the turn in flight, and how the last turn ended.
 
+`temporal workflow describe` shows how far the running turn has got, because the heartbeat carries it: `[{"items":6,"lastItem":"command_execution","threadId":"..."}]`. Heartbeats are throttled against the heartbeat timeout, so it moves in jumps rather than on every item.
+
 ## Reproducing the crash test
 
 Ask for two shell commands one at a time, the second one slow (`echo first >> a.txt`, then `sleep 30`). Wait until the rollout has more tool calls than tool outputs, so the first tool is settled and the second is in flight. Then `pkill -9 -f "codex-temporal.*src/worker.ts"`, wait past the 30s heartbeat timeout, and start a fresh worker.
@@ -93,7 +95,9 @@ The observed run. Before the kill: 1 prompt, 0 turn completions, 2 tool calls, 1
 
 ## Known gaps
 
-- **No step level.** A turn is the smallest durable unit here. Codex has no "run one model call and its tools, then stop" surface, so a crash re-drives from wherever the rollout left off rather than from the last step. On the Pi fork we added stepping; the same change here is a core change, not a CLI change.
+- **No step level, and it costs less than it sounds.** A turn is the smallest durable unit here, but that is not the same gap it was on the Pi fork. Codex records each item to the rollout as it happens, and a resumed turn picks up from there, so the work lost to a crash is already about one step: the tool-crash test above finished the turn with the completed tool's side effect intact and not repeated. What a step-per-activity design would add is control and visibility, not saved work, and the visibility half is covered by the progress on the heartbeat.
+
+  The remaining half is not cheap. `run_turn` does have a step loop, so stopping after one step is a small change on its own, but a turn that stops early is not a completed turn, and this protocol has no way to say that: the app-server would emit `turn/completed` for something still mid-conversation. Making it honest means a new terminal turn status threaded through the app-server, both SDKs, the rollout projection that reconstructs turns (`build_turns_from_rollout_items`, which fork and rollback depend on), and the TUI. That is a large, invasive change for control this executor does not currently need, so it is deliberately not built.
 - **A settled tool call is reported as aborted, not unknown.** See above.
 - **A source build cannot compile the code-mode host.** Codex routes shell tools through a host that embeds V8, and the rusty_v8 prebuilt for `aarch64-apple-darwin` is a 404 in this version. Copying the prebuilt host out of the `@openai/codex` npm platform package into `codex-rs/target/debug/codex-code-mode-host` works and is what the crash test above ran against.
 - **A killed process can leave a thread locked.** The writer lock is an advisory `flock`, so the OS releases it when the process dies. It only blocks a resume while a process still holds it, which is why the panic above was so damaging: the panicking process stayed alive.

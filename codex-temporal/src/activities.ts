@@ -77,13 +77,27 @@ const attempt = (): number => {
   }
 };
 
+// What a turn reports while it runs. It rides the heartbeat, so `temporal workflow describe`
+// shows which step a turn is on without anyone reading the rollout. A turn is the durable unit
+// here, so this is how a step is visible at all.
+interface TurnProgress {
+  readonly threadId?: string;
+  // Items codex has finished in this turn: roughly, the steps taken.
+  readonly items: number;
+  readonly lastItem?: string;
+}
+
 // The last heartbeat of the previous attempt. Codex mints the thread id mid-turn, so this is how
 // a retry of a first turn learns the id the workflow never got to hear about.
 const threadIdFromLastAttempt = (): string | undefined => {
   try {
     const details = Context.current().info.heartbeatDetails;
     const last = Array.isArray(details) ? details[details.length - 1] : details;
-    return typeof last === "string" && last.length > 0 ? last : undefined;
+    if (typeof last === "string") {
+      return last.length > 0 ? last : undefined;
+    }
+    const threadId = (last as TurnProgress | undefined)?.threadId;
+    return typeof threadId === "string" && threadId.length > 0 ? threadId : undefined;
   } catch {
     return undefined;
   }
@@ -102,6 +116,9 @@ export function makeActivities(cfg: Config) {
   async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     let threadId = input.threadId ?? threadIdFromLastAttempt();
     let progressedAt = Date.now();
+    const progress = (): TurnProgress => ({ threadId, items, lastItem });
+    let items = 0;
+    let lastItem: string | undefined;
 
     // Kills the codex child: on a stall, and when the workflow interrupts the turn. Without it an
     // interrupt would cancel the activity and leave codex running against the same thread.
@@ -111,7 +128,7 @@ export function makeActivities(cfg: Config) {
     cancellation?.addEventListener("abort", () => child.abort(), { once: true });
 
     const stop = heartbeatWhileProgressing(
-      () => threadId,
+      progress,
       () => progressedAt,
       cfg.stallTimeoutMs,
       () => {
@@ -173,9 +190,13 @@ export function makeActivities(cfg: Config) {
           // Heartbeat the id the moment Codex mints it, so a crash from here on resumes this
           // thread instead of starting a second one.
           threadId = event.thread_id;
-          beat(threadId);
-        } else if (event.type === "item.completed" && event.item.type === "agent_message") {
-          finalResponse = event.item.text;
+          beat(progress());
+        } else if (event.type === "item.completed") {
+          items++;
+          lastItem = event.item.type;
+          if (event.item.type === "agent_message") {
+            finalResponse = event.item.text;
+          }
         } else if (event.type === "turn.failed") {
           throw new Error(event.error.message);
         }
