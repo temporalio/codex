@@ -121,3 +121,38 @@ fn approve_for_me_flag_conflicts_with_other_sandbox_modes() {
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }
+
+#[test]
+fn resume_continue_takes_no_prompt() {
+    let cli = Cli::parse_from([
+        "codex-exec",
+        "resume",
+        "01a01e42-ffdd-7bc0-86fd-8a494622322b",
+        "--continue",
+    ]);
+
+    let Some(Command::Resume(args)) = cli.command else {
+        panic!("expected resume command");
+    };
+    assert!(args.continue_turn);
+    assert_eq!(args.prompt, None);
+    assert_eq!(
+        args.session_id.as_deref(),
+        Some("01a01e42-ffdd-7bc0-86fd-8a494622322b")
+    );
+}
+
+#[test]
+fn resume_continue_conflicts_with_a_prompt() {
+    // A turn being carried on takes no new input, so asking for both is a mistake worth
+    // catching at parse time rather than silently dropping one.
+    let result = Cli::try_parse_from([
+        "codex-exec",
+        "resume",
+        "01a01e42-ffdd-7bc0-86fd-8a494622322b",
+        "--continue",
+        "keep going",
+    ]);
+
+    assert!(result.is_err());
+}
