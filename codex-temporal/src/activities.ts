@@ -7,6 +7,7 @@ import { Codex } from "@openai/codex-sdk";
 import type { Config } from "./config.js";
 import type { RunTurnInput, RunTurnResult } from "./protocol.js";
 import { findRollout, inspectPrompt } from "./rollout.js";
+import { reapOrphanedWriter } from "./orphans.js";
 
 // The prompt carries a zero-width marker with its promptId, so a re-driven activity can tell
 // whether this exact prompt was already recorded. It also tells our prompts apart from the
@@ -68,6 +69,14 @@ const cancellationSignal = (): AbortSignal | undefined => {
   }
 };
 
+const attempt = (): number => {
+  try {
+    return Context.current().info.attempt;
+  } catch {
+    return 1;
+  }
+};
+
 // The last heartbeat of the previous attempt. Codex mints the thread id mid-turn, so this is how
 // a retry of a first turn learns the id the workflow never got to hear about.
 const threadIdFromLastAttempt = (): string | undefined => {
@@ -113,6 +122,21 @@ export function makeActivities(cfg: Config) {
     const turnOptions = { signal: child.signal };
 
     try {
+      if (threadId && attempt() > 1) {
+        // A worker killed outright cannot clean up after itself, so its codex may still be
+        // holding this thread and would block the resume below.
+        const { killed, liveHolders } = await reapOrphanedWriter(cfg.codexHome, threadId);
+        if (killed.length > 0) {
+          console.log(`reaped orphaned codex ${killed.join(", ")} holding thread ${threadId}`);
+        }
+        if (liveHolders.length > 0) {
+          throw new Error(
+            `thread ${threadId} is held by a live codex (${liveHolders.join(", ")}); ` +
+              `an earlier attempt is still running somewhere`,
+          );
+        }
+      }
+
       if (threadId) {
         const rollout = await findRollout(cfg.sessionsDir, threadId);
         const state = rollout ? await inspectPrompt(rollout, marker(input.promptId)) : undefined;

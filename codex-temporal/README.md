@@ -45,7 +45,11 @@ So the activity heartbeats on progress, not on the clock. Every event from codex
 
 The same abort is wired to activity cancellation, so interrupting a turn stops codex rather than leaving it running against the thread.
 
+A worker killed outright cannot run any of that, so its codex can outlive it. A codex that is mid-stream dies on its own, because writing to the closed pipe kills it; a quiet one, which is the hung case again, keeps running and keeps the thread's writer lock. Every later attempt would then fail with `already has an active writer` until it finishes. So a retry reaps first: it looks for a process holding that thread's lock file and kills it, but only if the process has been reparented, which happens exactly when the worker that spawned it is gone. A codex being driven by another live worker fails that test and is left alone; the attempt fails saying so, rather than fighting over the thread.
+
 Observed against a stand-in that reports a thread and then ignores both events and `SIGTERM`: the activity failed with `codex produced no events for 18s and was killed; the turn will be carried on by the next attempt`, and moved to attempt 2.
+
+Reaping observed against a real thread held by a detached process: a resume failed with `already has an active writer`, the reaper reported `{"killed":[14195],"liveHolders":[]}`, and the same resume then ran to completion. A holder with a live parent came back as `{"killed":[],"liveHolders":[15127]}` and was left running.
 
 ## What is durable, and what is not
 
@@ -93,5 +97,4 @@ The observed run. Before the kill: 1 prompt, 0 turn completions, 2 tool calls, 1
 - **A settled tool call is reported as aborted, not unknown.** See above.
 - **A source build cannot compile the code-mode host.** Codex routes shell tools through a host that embeds V8, and the rusty_v8 prebuilt for `aarch64-apple-darwin` is a 404 in this version. Copying the prebuilt host out of the `@openai/codex` npm platform package into `codex-rs/target/debug/codex-code-mode-host` works and is what the crash test above ran against.
 - **A killed process can leave a thread locked.** The writer lock is an advisory `flock`, so the OS releases it when the process dies. It only blocks a resume while a process still holds it, which is why the panic above was so damaging: the panicking process stayed alive.
-- **Killing the worker itself with `SIGKILL` can leave one codex behind.** The escalation runs in the worker, so a worker that is denied the chance to clean up cannot do it. The orphan holds its thread's lock until it is reaped, which blocks that one thread's retries. A worker that shuts down normally does not have this problem.
 - **`codex exec` still waits forever if a turn task dies without saying so.** The panic that used to cause that is fixed, but the wait loop only ends on an event or a closed stream, so any other silent death of the turn task would hang it. The stall timeout above is the reason that is now survivable rather than fatal.

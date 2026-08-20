@@ -5,6 +5,8 @@ export interface Config {
   readonly address: string;
   readonly namespace: string;
   readonly taskQueue: string;
+  // Codex's home. Holds the rollout logs and the per-thread writer locks.
+  readonly codexHome: string;
   // Where Codex keeps its rollout logs. That directory is the durable record, so a fleet points
   // it at shared storage.
   readonly sessionsDir: string;
@@ -23,11 +25,13 @@ export interface Config {
 }
 
 export function fromEnv(): Config {
+  const codexHome = process.env.CODEX_HOME ?? `${process.env.HOME}/.codex`;
   return {
+    codexHome,
     address: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
     namespace: process.env.TEMPORAL_NAMESPACE ?? "default",
     taskQueue: process.env.CODEX_TEMPORAL_TASK_QUEUE ?? "codex-thread",
-    sessionsDir: process.env.CODEX_SESSIONS_DIR ?? `${process.env.HOME}/.codex/sessions`,
+    sessionsDir: process.env.CODEX_SESSIONS_DIR ?? `${codexHome}/sessions`,
     idleTimeout: process.env.CODEX_IDLE_TIMEOUT ?? "5 minutes",
     codexPath: process.env.CODEX_PATH,
     model: process.env.CODEX_MODEL,
